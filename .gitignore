@@ -1,0 +1,14 @@
+syntax: glob
+
+*.egg
+*.egg-info
+*.py?
+*.sw?
+*.tmp
+*~
+.DS_Store
+.cache
+.coverage
+dist
+htmlcov
+tags
