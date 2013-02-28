@@ -105,7 +105,7 @@ class PKCS7(object):
                        True,
                        [
                         # Version
-                        asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, False, String.fromCharCode(obj.version)),
+                        asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, False, chr(obj.version)),
                         # IssuerAndSerialNumber
                         asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, True, [
                           # Name
@@ -310,7 +310,7 @@ class PKCS7(object):
             # [0] EnvelopedData
             asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, True, [
               # Version
-              asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, False, String.fromCharCode(self.version)),
+              asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, False, chr(self.version)),
               # RecipientInfos
               asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SET, True, self.p7._recipientInfosToAsn1(self.recipients)),
               # EncryptedContentInfo
