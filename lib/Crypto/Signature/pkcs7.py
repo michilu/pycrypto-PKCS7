@@ -1,500 +1,469 @@
-###
-Javascript implementation of PKCS#7 v1.5.  Currently only certain parts of
-PKCS#7 are implemented, especially the enveloped-data content type.
+# Python of PKCS#7 v1.5.  Currently only certain parts of
+# PKCS#7 are implemented, especially the enveloped-data content type.
+#
+# Copyright (c) 2013 ENDOH takanao <djmchl@gmail.com>
+#
+# Currently this implementation only supports ContentType of either
+# EnvelopedData or EncryptedData on root level.  The top level elements may
+# contain only a ContentInfo of ContentType Data, i.e. plain data.  Further
+# nesting is not (yet) supported.
 
-@author Stefan Siegl
+#import aes
+#import asn1
+#import pkcs7asn1
+#import pki
+#import random
+#import util
 
-Copyright (c) 2012 Stefan Siegl <stesie@brokenpipe.de>
+class PKCS7(object):
+  def messageFromPem(self, pem):
+    """
+    Converts a PKCS#7 message from PEM format.
 
-Currently this implementation only supports ContentType of either
-EnvelopedData or EncryptedData on root level.  The top level elements may
-contain only a ContentInfo of ContentType Data, i.e. plain data.  Further
-nesting is not (yet) supported.
+    @param pem the PEM-formatted PKCS#7 message.
 
-The Forge validators for PKCS #7's ASN.1 structures are available from
-a seperate file pkcs7asn1.js, since those are referenced from other
-PKCS standards like PKCS #12.
-###
-(->
-
-  # define forge
-  forge = {}
-  if typeof (window) isnt "undefined"
-    forge = window.forge = window.forge or {}
-
-  # define node.js module
-  else if typeof (module) isnt "undefined" and module.exports
-    forge =
-      aes: require("./aes")
-      asn1: require("./asn1")
-      des: require("./des")
-      pkcs7:
-        asn1: require("./pkcs7asn1")
-
-      pki: require("./pki")
-      random: require("./random")
-      util: require("./util")
-
-    module.exports = forge.pkcs7
-
-  # shortcut for ASN.1 API
-  asn1 = forge.asn1
-
-  # shortcut for PKCS#7 API
-  p7 = forge.pkcs7 = forge.pkcs7 or {}
-
-  ###
-  Converts a PKCS#7 message from PEM format.
-
-  @param pem the PEM-formatted PKCS#7 message.
-
-  @return the PKCS#7 message.
-  ###
-  p7.messageFromPem = (pem) ->
-    der = forge.pki.pemToDer(pem)
+    @return the PKCS#7 message.
+    """
+    der = pki.pemToDer(pem)
     obj = asn1.fromDer(der)
-    p7.messageFromAsn1 obj
+    return self.messageFromAsn1(obj)
 
+  def messageToPem(self, msg, maxline=None):
+    """
+    Converts a PKCS#7 message to PEM format.
 
-  ###
-  Converts a PKCS#7 message to PEM format.
+    @param msg The PKCS#7 message object
+    @param maxline The maximum characters per line, defaults to 64.
 
-  @param msg The PKCS#7 message object
-  @param maxline The maximum characters per line, defaults to 64.
-
-  @return The PEM-formatted PKCS#7 message.
-  ###
-  p7.messageToPem = (msg, maxline) ->
+    @return The PEM-formatted PKCS#7 message.
+    """
+    if maxline is None:
+      maxline = 64
     out = asn1.toDer(msg.toAsn1())
-    out = forge.util.encode64(out.getBytes(), maxline or 64)
-    "-----BEGIN PKCS7-----\r\n" + out + "\r\n-----END PKCS7-----"
+    out = util.encode64(out.getBytes(), maxline)
+    return "-----BEGIN PKCS7-----\r\n{0}\r\n-----END PKCS7-----".format(out)
 
+  def messageFromAsn1(self, obj):
+    """
+    Converts a PKCS#7 message from an ASN.1 object.
 
-  ###
-  Converts a PKCS#7 message from an ASN.1 object.
+    @param obj the ASN.1 representation of a ContentInfo.
 
-  @param obj the ASN.1 representation of a ContentInfo.
-
-  @return the PKCS#7 message.
-  ###
-  p7.messageFromAsn1 = (obj) ->
-
+    @return the PKCS#7 message.
+    """
     # validate root level ContentInfo and capture data
-    capture = {}
-    errors = []
-    unless asn1.validate(obj, p7.asn1.contentInfoValidator, capture, errors)
-      throw
-        message: "Cannot read PKCS#7 message. " + "ASN.1 object is not an PKCS#7 ContentInfo."
-        errors: errors
+    capture = dict()
+    try:
+      asn1.validate(obj, self.asn1.contentInfoValidator, capture)
+    except:
+      raise Exception("Cannot read PKCS#7 message. ASN.1 object is not an PKCS#7 ContentInfo.")
     contentType = asn1.derToOid(capture.contentType)
-    msg = undefined
-    switch contentType
-      when forge.pki.oids.envelopedData
-        msg = p7.createEnvelopedData()
-      when forge.pki.oids.encryptedData
-        msg = p7.createEncryptedData()
-      else
-        throw message: "Cannot read PKCS#7 message. ContentType with OID " + contentType + " is not (yet) supported."
-    msg.fromAsn1 capture.content.value[0]
-    msg
+    if contentType == pki.oids.envelopedData:
+      msg = self.createEnvelopedData()
+    elif contentType == pki.oids.encryptedData:
+      msg = self.createEncryptedData()
+    else
+      raise Exception("Cannot read PKCS#7 message. ContentType with OID {0} is not (yet) supported.".format(contentType))
+    msg.fromAsn1(capture.content.value[0])
+    return msg
 
+  def _recipientInfoFromAsn1(self, obj):
+    """
+    Converts a single RecipientInfo from an ASN.1 object.
 
-  ###
-  Converts a single RecipientInfo from an ASN.1 object.
+    @param obj The ASN.1 representation of a RecipientInfo.
 
-  @param obj The ASN.1 representation of a RecipientInfo.
-
-  @return The recipientInfo object.
-  ###
-  _recipientInfoFromAsn1 = (obj) ->
-
+    @return The recipientInfo object.
+    """
     # Validate EnvelopedData content block and capture data.
     capture = {}
-    errors = []
-    unless asn1.validate(obj, p7.asn1.recipientInfoValidator, capture, errors)
-      throw
-        message: "Cannot read PKCS#7 message. " + "ASN.1 object is not an PKCS#7 EnvelopedData."
-        errors: errors
-    version: capture.version.charCodeAt(0)
-    issuer: forge.pki.RDNAttributesAsArray(capture.issuer)
-    serialNumber: forge.util.createBuffer(capture.serial).toHex()
-    encContent:
-      algorithm: asn1.derToOid(capture.encAlgorithm)
-      parameter: capture.encParameter.value
-      content: capture.encKey
+    try:
+      asn1.validate(obj, self.asn1.recipientInfoValidator, capture)
+    except:
+      raise Exception("Cannot read PKCS#7 message. ASN.1 object is not an PKCS#7 EnvelopedData.")
+    return dict(
+      version = capture.version.charCodeAt(0),
+      issuer = pki.RDNAttributesAsArray(capture.issuer),
+      serialNumber = util.createBuffer(capture.serial).toHex(),
+      encContent = dict(
+        algorithm = asn1.derToOid(capture.encAlgorithm),
+        parameter = capture.encParameter.value,
+        content = capture.encKey,
+        ),
+      )
 
+  def _recipientInfoToAsn1(self, obj):
+    """
+    Converts a single recipientInfo object to an ASN.1 object.
 
-  ###
-  Converts a single recipientInfo object to an ASN.1 object.
+    @param obj The recipientInfo object.
 
-  @param obj The recipientInfo object.
+    @return The ASN.1 representation of a RecipientInfo.
+    """
+    return asn1.create(asn1.Class.UNIVERSAL,
+                       asn1.Type.SEQUENCE,
+                       True,
+                       [
+                        # Version
+                        asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, False, String.fromCharCode(obj.version)),
+                        # IssuerAndSerialNumber
+                        asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, True, [
+                          # Name
+                          pki.distinguishedNameToAsn1(dict(attributes=obj.issuer)),
+                          # Serial
+                          asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, False, util.hexToBytes(obj.serialNumber)),
+                        ]),
+                        # KeyEncryptionAlgorithmIdentifier
+                        asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, True, [
+                          # Algorithm
+                          asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, False, asn1.oidToDer(obj.encContent.algorithm).getBytes()),
+                          # Parameter, force NULL, only RSA supported for now.
+                          asn1.create(asn1.Class.UNIVERSAL, asn1.Type.NULL, False, "")
+                        ]),
+                        # EncryptedKey
+                        asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, False, obj.encContent.content)
+                      ],
+                     )
+  def _recipientInfosFromAsn1(self, objArr):
+    """
+    Map a set of RecipientInfo ASN.1 objects to recipientInfo objects.
 
-  @return The ASN.1 representation of a RecipientInfo.
-  ###
-  _recipientInfoToAsn1 = (obj) ->
+    @param objArr Array of ASN.1 representations RecipientInfo (i.e. SET OF).
 
-    # Version
-
-    # IssuerAndSerialNumber
-
-    # Name
-
-    # Serial
-
-    # KeyEncryptionAlgorithmIdentifier
-
-    # Algorithm
-
-    # Parameter, force NULL, only RSA supported for now.
-
-    # EncryptedKey
-    asn1.create asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, String.fromCharCode(obj.version)), asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [forge.pki.distinguishedNameToAsn1(attributes: obj.issuer), asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, forge.util.hexToBytes(obj.serialNumber))]), asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(obj.encContent.algorithm).getBytes()), asn1.create(asn1.Class.UNIVERSAL, asn1.Type.NULL, false, "")]), asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, obj.encContent.content)]
-
-
-  ###
-  Map a set of RecipientInfo ASN.1 objects to recipientInfo objects.
-
-  @param objArr Array of ASN.1 representations RecipientInfo (i.e. SET OF).
-
-  @return array of recipientInfo objects.
-  ###
-  _recipientInfosFromAsn1 = (objArr) ->
+    @return array of recipientInfo objects.
+    """
     ret = []
     i = 0
+    while i < len(objArr): #TODO: use for loop
+      ret.append(self._recipientInfoFromAsn1(objArr[i]))
+      i += 1
+    return ret
 
-    while i < objArr.length
-      ret.push _recipientInfoFromAsn1(objArr[i])
-      i++
-    ret
+  def _recipientInfosToAsn1(self, recipientsArr):
+    """
+    Map an array of recipientInfo objects to ASN.1 objects.
 
+    @param recipientsArr Array of recipientInfo objects.
 
-  ###
-  Map an array of recipientInfo objects to ASN.1 objects.
-
-  @param recipientsArr Array of recipientInfo objects.
-
-  @return Array of ASN.1 representations RecipientInfo.
-  ###
-  _recipientInfosToAsn1 = (recipientsArr) ->
+    @return Array of ASN.1 representations RecipientInfo.
+    """
     ret = []
     i = 0
+    while i < len(recipientsArr): #TODO: use for loop
+      ret.append(self._recipientInfoToAsn1(recipientsArr[i]))
+      i += 1
+    return ret
 
-    while i < recipientsArr.length
-      ret.push _recipientInfoToAsn1(recipientsArr[i])
-      i++
-    ret
+  def _encContentToAsn1(self, ec):
+    """
+    Map messages encrypted content to ASN.1 objects.
 
+    @param ec The encContent object of the message.
 
-  ###
-  Map messages encrypted content to ASN.1 objects.
+    @return ASN.1 representation of the encContent object (SEQUENCE).
+    """
+    return [
+      # ContentType, always Data for the moment
+      asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, False, asn1.oidToDer(pki.oids.data).getBytes()),
+      # ContentEncryptionAlgorithmIdentifier
+      asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, True, [
+        # Algorithm
+        asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, False, asn1.oidToDer(ec.algorithm).getBytes()),
+        # Parameters (IV)
+        asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, False, ec.parameter.getBytes()),
+      ]),
+      # [0] EncryptedContent
+      asn1.create(asn1.Class.CONTEXT_SPECIFIC, 0, True, [
+        asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, False, ec.content.getBytes()),
+      ]),
+    ]
 
-  @param ec The encContent object of the message.
+  def _fromAsn1(self, msg, obj, validator):
+    """
+    Reads the "common part" of an PKCS#7 content block (in ASN.1 format)
 
-  @return ASN.1 representation of the encContent object (SEQUENCE).
-  ###
-  _encContentToAsn1 = (ec) ->
+    This function reads the "common part" of the PKCS#7 content blocks
+    EncryptedData and EnvelopedData, i.e. version number and symmetrically
+    encrypted content block.
 
-    # ContentType, always Data for the moment
+    The result of the ASN.1 validate and capture process is returned
+    to allow the caller to extract further data, e.g. the list of recipients
+    in case of a EnvelopedData object.
 
-    # ContentEncryptionAlgorithmIdentifier
-
-    # Algorithm
-
-    # Parameters (IV)
-
-    # [0] EncryptedContent
-    [asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(forge.pki.oids.data).getBytes()), asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(ec.algorithm).getBytes()), asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, ec.parameter.getBytes())]), asn1.create(asn1.Class.CONTEXT_SPECIFIC, 0, true, [asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, ec.content.getBytes())])]
-
-
-  ###
-  Reads the "common part" of an PKCS#7 content block (in ASN.1 format)
-
-  This function reads the "common part" of the PKCS#7 content blocks
-  EncryptedData and EnvelopedData, i.e. version number and symmetrically
-  encrypted content block.
-
-  The result of the ASN.1 validate and capture process is returned
-  to allow the caller to extract further data, e.g. the list of recipients
-  in case of a EnvelopedData object.
-
-  @param msg The PKCS#7 object to read the data to
-  @param obj The ASN.1 representation of the content block
-  @param validator The ASN.1 structure validator object to use
-  @return Map with values captured by validator object
-  ###
-  _fromAsn1 = (msg, obj, validator) ->
+    @param msg The PKCS#7 object to read the data to
+    @param obj The ASN.1 representation of the content block
+    @param validator The ASN.1 structure validator object to use
+    @return Map with values captured by validator object
+    """
     capture = {}
-    errors = []
-    unless asn1.validate(obj, validator, capture, errors)
-      throw
-        message: "Cannot read PKCS#7 message. " + "ASN.1 object is not an PKCS#7 EnvelopedData."
-        errors: errors
-
+    try:
+      asn1.validate(obj, validator, capture)
+    except:
+      raise Exception("Cannot read PKCS#7 message. ASN.1 object is not an PKCS#7 EnvelopedData.")
     # Check contentType, so far we only support (raw) Data.
     contentType = asn1.derToOid(capture.contentType)
-    throw message: "Unsupported PKCS#7 message. " + "Only contentType Data supported within EnvelopedData."  if contentType isnt forge.pki.oids.data
+    if contentType != pki.oids.data:
+      raise Exception("Unsupported PKCS#7 message. Only contentType Data supported within EnvelopedData.")
     content = ""
-    if capture.encContent.constructor is Array
+    if isinstance(capture.encContent.constructor, list):
       i = 0
-
-      while i < capture.encContent.length
-        throw message: "Malformed PKCS#7 message, expecting encrypted " + "content constructed of only OCTET STRING objects."  if capture.encContent[i].type isnt asn1.Type.OCTETSTRING
+      while i < len(capture.encContent): #TODO: use for loop
+        if capture.encContent[i].type isnt asn1.Type.OCTETSTRING
+          raise Exception("Malformed PKCS#7 message, expecting encrypted " + "content constructed of only OCTET STRING objects.")
         content += capture.encContent[i].value
-        i++
+        i += 1
     else
       content = capture.encContent
-    msg.version = capture.version.charCodeAt(0)
-    msg.encContent =
-      algorithm: asn1.derToOid(capture.encAlgorithm)
-      parameter: forge.util.createBuffer(capture.encParameter.value)
-      content: forge.util.createBuffer(content)
+    msg.version = ord(capture.version[0])
+    msg.encContent = dict(
+      algorithm = asn1.derToOid(capture.encAlgorithm),
+      parameter = util.createBuffer(capture.encParameter.value),
+      content = util.createBuffer(content),
+    )
+    return capture
 
-    capture
+  def _decryptContent(self, msg):
+    """
+    Decrypt the symmetrically encrypted content block of the PKCS#7 message.
 
+    Decryption is skipped in case the PKCS#7 message object already has a
+    (decrypted) content attribute.  The algorithm, key and cipher parameters
+    (probably the iv) are taken from the encContent attribute of the message
+    object.
 
-  ###
-  Decrypt the symmetrically encrypted content block of the PKCS#7 message.
-
-  Decryption is skipped in case the PKCS#7 message object already has a
-  (decrypted) content attribute.  The algorithm, key and cipher parameters
-  (probably the iv) are taken from the encContent attribute of the message
-  object.
-
-  @param The PKCS#7 message object.
-  ###
-  _decryptContent = (msg) ->
-    throw message: "Symmetric key not available."  if msg.encContent.key is `undefined`
-    if msg.content is `undefined`
-      ciph = undefined
-      switch msg.encContent.algorithm
-        when forge.pki.oids["aes128-CBC"], forge.pki.oids["aes192-CBC"]
-      , forge.pki.oids["aes256-CBC"]
-          ciph = forge.aes.createDecryptionCipher(msg.encContent.key)
-        when forge.pki.oids["des-EDE3-CBC"]
-          ciph = forge.des.createDecryptionCipher(msg.encContent.key)
-        else
-          throw message: "Unsupported symmetric cipher, " + "OID " + msg.encContent.algorithm
-      ciph.start msg.encContent.parameter
-      ciph.update msg.encContent.content
-      throw message: "Symmetric decryption failed."  unless ciph.finish()
+    @param The PKCS#7 message object.
+    """
+    if msg.encContent.key is None:
+      raise Exception("Symmetric key not available.")
+    if msg.content is None:
+      ciph = None
+      if msg.encContent.algorithm in [pki.oids["aes128-CBC"], pki.oids["aes192-CBC"], pki.oids["aes256-CBC"]]:
+        ciph = aes.createDecryptionCipher(msg.encContent.key)
+      elif msg.encContent.algorithm == pki.oids["des-EDE3-CBC"]:
+        ciph = des.createDecryptionCipher(msg.encContent.key)
+      else
+        raise Exception("Unsupported symmetric cipher, OID {0}".format(msg.encContent.algorithm))
+      ciph.start(msg.encContent.parameter)
+      ciph.update(msg.encContent.content)
+      if not ciph.finish():
+        raise Exception("Symmetric decryption failed.")
       msg.content = ciph.output
 
+  def createEncryptedData(self):
+    """
+    Creates an empty PKCS#7 message of type EncryptedData.
 
-  ###
-  Creates an empty PKCS#7 message of type EncryptedData.
+    @return the message.
+    """
 
-  @return the message.
-  ###
-  p7.createEncryptedData = ->
-    msg = null
-    msg =
-      type: forge.pki.oids.encryptedData
-      version: 0
-      encContent:
-        algorithm: forge.pki.oids["aes256-CBC"]
+    class msg(object):
+      type = pki.oids.encryptedData
+      version = 0
+      encContent = dict(
+        algorithm = pki.oids["aes256-CBC"],
+      )
 
+      def __init__(self, p7):
+        self.p7 = p7
 
-      ###
-      Reads an EncryptedData content block (in ASN.1 format)
+      def fromAsn1(self, obj):
+        """
+        Reads an EncryptedData content block (in ASN.1 format)
 
-      @param obj The ASN.1 representation of the EncryptedData content block
-      ###
-      fromAsn1: (obj) ->
-
+        @param obj The ASN.1 representation of the EncryptedData content block
+        """
         # Validate EncryptedData content block and capture data.
-        _fromAsn1 msg, obj, p7.asn1.encryptedDataValidator
+        self.p7._fromAsn1(msg, obj, self.p7.asn1.encryptedDataValidator)
 
+      def decrypt(self, key):
+        """
+        Decrypt encrypted content
 
-      ###
-      Decrypt encrypted content
+        @param key The (symmetric) key as a byte buffer
+        """
+        if key is not None:
+          self.encContent.key = key
+        self.p7._decryptContent(msg)
 
-      @param key The (symmetric) key as a byte buffer
-      ###
-      decrypt: (key) ->
-        msg.encContent.key = key  if key isnt `undefined`
-        _decryptContent msg
+    return msg(self)
 
-    msg
+  def createEnvelopedData(self):
+    """
+    Creates an empty PKCS#7 message of type EnvelopedData.
 
+    @return the message.
+    """
+    class msg(object):
+      type = pki.oids.envelopedData
+      version = 0
+      recipients = list()
+      encContent = dict(
+        algorithm = pki.oids["aes256-CBC"],
+      )
 
-  ###
-  Creates an empty PKCS#7 message of type EnvelopedData.
+      def __init__(self, p7):
+        self.p7 = p7
 
-  @return the message.
-  ###
-  p7.createEnvelopedData = ->
-    msg = null
-    msg =
-      type: forge.pki.oids.envelopedData
-      version: 0
-      recipients: []
-      encContent:
-        algorithm: forge.pki.oids["aes256-CBC"]
+      def fromAsn1(self, obj):
+        """
+        Reads an EnvelopedData content block (in ASN.1 format)
 
-
-      ###
-      Reads an EnvelopedData content block (in ASN.1 format)
-
-      @param obj The ASN.1 representation of the EnvelopedData content block
-      ###
-      fromAsn1: (obj) ->
-
+        @param obj The ASN.1 representation of the EnvelopedData content block
+        """
         # Validate EnvelopedData content block and capture data.
-        capture = _fromAsn1(msg, obj, p7.asn1.envelopedDataValidator)
-        msg.recipients = _recipientInfosFromAsn1(capture.recipientInfos.value)
+        capture = self.p7._fromAsn1(msg, obj, self.p7.asn1.envelopedDataValidator)
+        self.recipients = self.p7._recipientInfosFromAsn1(capture.recipientInfos.value)
 
-      toAsn1: ->
+      def toAsn1(self):
+        return asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, True, [
+          # ContentInfo
+          asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, False, asn1.oidToDer(self.type).getBytes()),
+          # ContentType
+          asn1.create(asn1.Class.CONTEXT_SPECIFIC, 0, True, [
+            # [0] EnvelopedData
+            asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, True, [
+              # Version
+              asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, False, String.fromCharCode(self.version)),
+              # RecipientInfos
+              asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SET, True, self.p7._recipientInfosToAsn1(self.recipients)),
+              # EncryptedContentInfo
+              asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, True, self.p7._encContentToAsn1(self.encContent))
+            ])
+          ])
+        ]
 
-        # ContentInfo
+      def findRecipient(self, cert):
+        """
+        Find recipient by X.509 certificate's subject.
 
-        # ContentType
+        @param cert The certificate for which's subject to look for.
 
-        # [0] EnvelopedData
-
-        # Version
-
-        # RecipientInfos
-
-        # EncryptedContentInfo
-        asn1.create asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(msg.type).getBytes()), asn1.create(asn1.Class.CONTEXT_SPECIFIC, 0, true, [asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, String.fromCharCode(msg.version)), asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SET, true, _recipientInfosToAsn1(msg.recipients)), asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, _encContentToAsn1(msg.encContent))])])]
-
-
-      ###
-      Find recipient by X.509 certificate's subject.
-
-      @param cert The certificate for which's subject to look for.
-
-      @return The recipient object
-      ###
-      findRecipient: (cert) ->
+        @return The recipient object
+        """
         sAttr = cert.subject.attributes
         i = 0
-
-        while i < msg.recipients.length
-          r = msg.recipients[i]
+        while i < len(self.recipients): #TODO: use for loop
+          r = self.recipients[i]
           rAttr = r.issuer
-          continue  if r.serialNumber isnt cert.serialNumber
-          continue  if rAttr.length isnt sAttr.length
-          match = true
+          if r.serialNumber != cert.serialNumber:
+            continue
+          if len(rAttr) != len(sAttr):
+            continue
+          match = True
           j = 0
-
-          while j < sAttr.length
-            if rAttr[j].type isnt sAttr[j].type or rAttr[j].value isnt sAttr[j].value
-              match = false
+          while j < len(sAttr): #TODO: use for loop
+            if rAttr[j].type != sAttr[j].type or rAttr[j].value != sAttr[j].value
+              match = False
               break
-            j++
-          return r  if match
-          i++
+            j += 1
+          if match:
+            return r
+          i += 1
 
+      def decrypt(self, recipient, privKey):
+        """
+        Decrypt enveloped content
 
-      ###
-      Decrypt enveloped content
+        @param recipient The recipient object related to the private key
+        @param privKey The (RSA) private key object
+        """
+        if self.encContent.key is None and recipient is not None and privKey is not None:
+          if recipient.encContent.algorithm == pki.oids.rsaEncryption:
+            key = privKey.decrypt(recipient.encContent.content)
+            self.encContent.key = util.createBuffer(key)
+          else
+            raise Exception("Unsupported asymmetric cipher, OID {0}".format(recipient.encContent.algorithm))
+        self.p7._decryptContent(self)
 
-      @param recipient The recipient object related to the private key
-      @param privKey The (RSA) private key object
-      ###
-      decrypt: (recipient, privKey) ->
-        if msg.encContent.key is `undefined` and recipient isnt `undefined` and privKey isnt `undefined`
-          switch recipient.encContent.algorithm
-            when forge.pki.oids.rsaEncryption
-              key = privKey.decrypt(recipient.encContent.content)
-              msg.encContent.key = forge.util.createBuffer(key)
-            else
-              throw message: "Unsupported asymmetric cipher, " + "OID " + recipient.encContent.algorithm
-        _decryptContent msg
+      def addRecipient(self, cert):
+        """
+        Add (another) entity to list of recipients.
 
-
-      ###
-      Add (another) entity to list of recipients.
-
-      @param cert The certificate of the entity to add.
-      ###
-      addRecipient: (cert) ->
-        msg.recipients.push
-          version: 0
-          issuer: cert.subject.attributes
-          serialNumber: cert.serialNumber
-          encContent:
-
+        @param cert The certificate of the entity to add.
+        """
+        self.recipients.append(dict(
+          version = 0,
+          issuer = cert.subject.attributes,
+          serialNumber = cert.serialNumber,
+          encContent = dict(
             # We simply assume rsaEncryption here, since forge.pki only
             # supports RSA so far.  If the PKI module supports other
             # ciphers one day, we need to modify this one as well.
-            algorithm: forge.pki.oids.rsaEncryption
-            key: cert.publicKey
+            algorithm = pki.oids.rsaEncryption,
+            key = cert.publicKey,
+          ),
+        ))
 
+      def encrypt(self, key, cipher):
+        """
+        Encrypt enveloped content.
 
+        This function supports two optional arguments, cipher and key, which
+        can be used to influence symmetric encryption.  Unless cipher is
+        provided, the cipher specified in encContent.algorithm is used
+        (defaults to AES-256-CBC).  If no key is provided, encContent.key
+        is (re-)used.  If that one's not set, a random key will be generated
+        automatically.
 
-      ###
-      Encrypt enveloped content.
-
-      This function supports two optional arguments, cipher and key, which
-      can be used to influence symmetric encryption.  Unless cipher is
-      provided, the cipher specified in encContent.algorithm is used
-      (defaults to AES-256-CBC).  If no key is provided, encContent.key
-      is (re-)used.  If that one's not set, a random key will be generated
-      automatically.
-
-      @param [key] The key to be used for symmetric encryption.
-      @param [cipher] The OID of the symmetric cipher to use.
-      ###
-      encrypt: (key, cipher) ->
-
+        @param [key] The key to be used for symmetric encryption.
+        @param [cipher] The OID of the symmetric cipher to use.
+        """
         # Part 1: Symmetric encryption
-        if msg.encContent.content is `undefined`
-          cipher = cipher or msg.encContent.algorithm
-          key = key or msg.encContent.key
-          keyLen = undefined
-          ivLen = undefined
-          ciphFn = undefined
-          switch cipher
-            when forge.pki.oids["aes128-CBC"]
-              keyLen = 16
-              ivLen = 16
-              ciphFn = forge.aes.createEncryptionCipher
-            when forge.pki.oids["aes192-CBC"]
-              keyLen = 24
-              ivLen = 16
-              ciphFn = forge.aes.createEncryptionCipher
-            when forge.pki.oids["aes256-CBC"]
-              keyLen = 32
-              ivLen = 16
-              ciphFn = forge.aes.createEncryptionCipher
-            when forge.pki.oids["des-EDE3-CBC"]
-              keyLen = 24
-              ivLen = 8
-              ciphFn = forge.des.createEncryptionCipher
-            else
-              throw message: "Unsupported symmetric cipher, OID " + cipher
-          if key is `undefined`
-            key = forge.util.createBuffer(forge.random.getBytes(keyLen))
-          else throw message: "Symmetric key has wrong length, " + "got " + key.length() + " bytes, expected " + keyLen  unless key.length() is keyLen
+        if self.encContent.content is None:
+          cipher = cipher or self.encContent.algorithm
+          key = key or self.encContent.key
+          keyLen = None
+          ivLen = None
+          ciphFn = None
+          if cipher == pki.oids["aes128-CBC"]:
+            keyLen = 16
+            ivLen = 16
+            ciphFn = forge.aes.createEncryptionCipher
+          elif cipher == pki.oids["aes192-CBC"]:
+            keyLen = 24
+            ivLen = 16
+            ciphFn = aes.createEncryptionCipher
+          elif cipher == pki.oids["aes256-CBC"]
+            keyLen = 32
+            ivLen = 16
+            ciphFn = aes.createEncryptionCipher
+          elif cipher == pki.oids["des-EDE3-CBC"]:
+            keyLen = 24
+            ivLen = 8
+            ciphFn = des.createEncryptionCipher
+          else
+            raise Exception("Unsupported symmetric cipher, OID {0}".format(cipher))
+          if key is None:
+            key = util.createBuffer(random.getBytes(keyLen))
+          else:
+            if len(key) != keyLen:
+              raise Exception("Symmetric key has wrong length, got {0} bytes, expected {1}".format(len(key), keyLen))
 
           # Keep a copy of the key & IV in the object, so the caller can
           # use it for whatever reason.
-          msg.encContent.algorithm = cipher
-          msg.encContent.key = key
-          msg.encContent.parameter = forge.util.createBuffer(forge.random.getBytes(ivLen))
+          self.encContent.algorithm = cipher
+          self.encContent.key = key
+          self.encContent.parameter = util.createBuffer(random.getBytes(ivLen))
           ciph = ciphFn(key)
-          ciph.start msg.encContent.parameter.copy()
-          ciph.update msg.content
+          ciph.start(self.encContent.parameter.copy())
+          ciph.update(self.content)
 
           # The finish function does PKCS#7 padding by default, therefore
           # no action required by us.
-          throw message: "Symmetric encryption failed."  unless ciph.finish()
-          msg.encContent.content = ciph.output
+          if not ciph.finish():
+            raise Exception("Symmetric encryption failed.")
+          self.encContent.content = ciph.output
 
         # Part 2: asymmetric encryption for each recipient
         i = 0
+        while i < len(self.recipients): #TODO: use for loop
+          recipient = self.recipients[i]
+          if recipient.encContent.content is not None: # Nothing to do, encryption already done.
+            continue
+          if recipient.encContent.algorithm == pki.oids.rsaEncryption:
+            recipient.encContent.content = recipient.encContent.key.encrypt(self.encContent.key.data)
+          else
+            raise Exception("Unsupported asymmetric cipher, OID {0}".format(recipient.encContent.algorithm))
+          i += 1
 
-        while i < msg.recipients.length
-          recipient = msg.recipients[i]
-          continue  if recipient.encContent.content isnt `undefined` # Nothing to do, encryption already done.
-          switch recipient.encContent.algorithm
-            when forge.pki.oids.rsaEncryption
-              recipient.encContent.content = recipient.encContent.key.encrypt(msg.encContent.key.data)
-            else
-              throw message: "Unsupported asymmetric cipher, OID " + recipient.encContent.algorithm
-          i++
-
-    msg
-)()
+    return msg(self)
