@@ -133,10 +133,8 @@ class PKCS7(object):
     @return array of recipientInfo objects.
     """
     ret = []
-    i = 0
-    while i < len(objArr): #TODO: use for loop
-      ret.append(self._recipientInfoFromAsn1(objArr[i]))
-      i += 1
+    for i in objArr:
+      ret.append(self._recipientInfoFromAsn1(i))
     return ret
 
   def _recipientInfosToAsn1(self, recipientsArr):
@@ -148,10 +146,8 @@ class PKCS7(object):
     @return Array of ASN.1 representations RecipientInfo.
     """
     ret = []
-    i = 0
-    while i < len(recipientsArr): #TODO: use for loop
-      ret.append(self._recipientInfoToAsn1(recipientsArr[i]))
-      i += 1
+    for i in recipientsArr:
+      ret.append(self._recipientInfoToAsn1(i))
     return ret
 
   def _encContentToAsn1(self, ec):
@@ -206,12 +202,10 @@ class PKCS7(object):
       raise Exception("Unsupported PKCS#7 message. Only contentType Data supported within EnvelopedData.")
     content = ""
     if isinstance(capture.encContent.constructor, list):
-      i = 0
-      while i < len(capture.encContent): #TODO: use for loop
-        if capture.encContent[i].type isnt asn1.Type.OCTETSTRING
+      for i in capture.encContent:
+        if i.type != asn1.Type.OCTETSTRING:
           raise Exception("Malformed PKCS#7 message, expecting encrypted " + "content constructed of only OCTET STRING objects.")
-        content += capture.encContent[i].value
-        i += 1
+        content += i.value
     else
       content = capture.encContent
     msg.version = ord(capture.version[0])
@@ -341,24 +335,19 @@ class PKCS7(object):
         @return The recipient object
         """
         sAttr = cert.subject.attributes
-        i = 0
-        while i < len(self.recipients): #TODO: use for loop
-          r = self.recipients[i]
+        for r in self.recipients:
           rAttr = r.issuer
           if r.serialNumber != cert.serialNumber:
             continue
           if len(rAttr) != len(sAttr):
             continue
           match = True
-          j = 0
-          while j < len(sAttr): #TODO: use for loop
+          for j in xrange(len(sAttr)):
             if rAttr[j].type != sAttr[j].type or rAttr[j].value != sAttr[j].value
               match = False
               break
-            j += 1
           if match:
             return r
-          i += 1
 
       def decrypt(self, recipient, privKey):
         """
@@ -455,15 +444,12 @@ class PKCS7(object):
           self.encContent.content = ciph.output
 
         # Part 2: asymmetric encryption for each recipient
-        i = 0
-        while i < len(self.recipients): #TODO: use for loop
-          recipient = self.recipients[i]
+        for recipient in self.recipients:
           if recipient.encContent.content is not None: # Nothing to do, encryption already done.
             continue
           if recipient.encContent.algorithm == pki.oids.rsaEncryption:
             recipient.encContent.content = recipient.encContent.key.encrypt(self.encContent.key.data)
           else
             raise Exception("Unsupported asymmetric cipher, OID {0}".format(recipient.encContent.algorithm))
-          i += 1
 
     return msg(self)
