@@ -6,4 +6,4 @@ python:
   - pypy
 install:
   - pip install .
-script: py.test
+script: PYTHONPATH=lib python setup.py test
