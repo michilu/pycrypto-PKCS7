@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, Command
 import os
 
 version = "0.1"
@@ -10,8 +10,25 @@ long_description = (
     read("README.rst")
     )
 
+class PyTest(Command):
+    user_options = []
+    def initialize_options(self):
+        pass
+    def finalize_options(self):
+        pass
+    def run(self):
+        import sys,subprocess
+        errno = subprocess.call([sys.executable, 'runtests.py'])
+        raise SystemExit(errno)
+
+class PyTestWithCov(PyTest):
+    def run(self):
+        import sys,subprocess
+        errno = subprocess.call([sys.executable, 'runtests.py', '--cov-report=html', '--cov=.', '--pdb'])
+        raise SystemExit(errno)
+
 setup(
-    name="PyCrypto-PKCS7",
+    name="pycrypto-PKCS7",
     version=version,
     description="Python Cryptography Toolkit (pycrypto) Public-Key Cryptography Standards (PKCS) #7: Cryptographic Message Syntax Version 1.5",
     long_description=long_description,
@@ -30,10 +47,19 @@ setup(
     ],
     keywords="",
     license="MIT",
-    packages=find_packages(),namespace_packages=["PyCrypto.Signature"],
+    packages=find_packages(where="lib"),
+    package_dir={"": "lib"},
+    namespace_packages=["Crypto", "Crypto.Signature"],
     include_package_data=True,
     zip_safe=False,
     install_requires=[
-        "PyCrypto",
+        "pycrypto",
         ],
+    extras_require = dict(
+        test=['pytest >= 2.0'],
+    ),
+    cmdclass = {
+      'test': PyTest,
+      'cov': PyTestWithCov,
+    },
     )
