@@ -132,10 +132,7 @@ class PKCS7(object):
 
     @return array of recipientInfo objects.
     """
-    ret = []
-    for i in objArr:
-      ret.append(self._recipientInfoFromAsn1(i))
-    return ret
+    return (self._recipientInfoFromAsn1(i) for i in objArr)
 
   def _recipientInfosToAsn1(self, recipientsArr):
     """
@@ -145,10 +142,7 @@ class PKCS7(object):
 
     @return Array of ASN.1 representations RecipientInfo.
     """
-    ret = []
-    for i in recipientsArr:
-      ret.append(self._recipientInfoToAsn1(i))
-    return ret
+    return (self._recipientInfoToAsn1(i) for i in recipientsArr)
 
   def _encContentToAsn1(self, ec):
     """
