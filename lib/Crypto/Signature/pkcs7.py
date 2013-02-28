@@ -224,7 +224,6 @@ class PKCS7(object):
     if msg.encContent.key is None:
       raise Exception("Symmetric key not available.")
     if msg.content is None:
-      ciph = None
       if msg.encContent.algorithm in [pki.oids["aes128-CBC"], pki.oids["aes192-CBC"], pki.oids["aes256-CBC"]]:
         ciph = aes.createDecryptionCipher(msg.encContent.key)
       elif msg.encContent.algorithm == pki.oids["des-EDE3-CBC"]:
@@ -395,9 +394,6 @@ class PKCS7(object):
         if self.encContent.content is None:
           cipher = cipher or self.encContent.algorithm
           key = key or self.encContent.key
-          keyLen = None
-          ivLen = None
-          ciphFn = None
           if cipher == pki.oids["aes128-CBC"]:
             keyLen = 16
             ivLen = 16
