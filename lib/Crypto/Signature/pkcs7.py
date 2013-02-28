@@ -62,7 +62,7 @@ class PKCS7(object):
       msg = self.createEnvelopedData()
     elif contentType == pki.oids.encryptedData:
       msg = self.createEncryptedData()
-    else
+    else:
       raise Exception("Cannot read PKCS#7 message. ContentType with OID {0} is not (yet) supported.".format(contentType))
     msg.fromAsn1(capture.content.value[0])
     return msg
@@ -200,7 +200,7 @@ class PKCS7(object):
         if i.type != asn1.Type.OCTETSTRING:
           raise Exception("Malformed PKCS#7 message, expecting encrypted " + "content constructed of only OCTET STRING objects.")
         content += i.value
-    else
+    else:
       content = capture.encContent
     msg.version = ord(capture.version[0])
     msg.encContent = dict(
@@ -228,7 +228,7 @@ class PKCS7(object):
         ciph = aes.createDecryptionCipher(msg.encContent.key)
       elif msg.encContent.algorithm == pki.oids["des-EDE3-CBC"]:
         ciph = des.createDecryptionCipher(msg.encContent.key)
-      else
+      else:
         raise Exception("Unsupported symmetric cipher, OID {0}".format(msg.encContent.algorithm))
       ciph.start(msg.encContent.parameter)
       ciph.update(msg.encContent.content)
@@ -317,7 +317,7 @@ class PKCS7(object):
               asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, True, self.p7._encContentToAsn1(self.encContent))
             ])
           ])
-        ]
+        ])
 
       def findRecipient(self, cert):
         """
@@ -336,7 +336,7 @@ class PKCS7(object):
             continue
           match = True
           for j in xrange(len(sAttr)):
-            if rAttr[j].type != sAttr[j].type or rAttr[j].value != sAttr[j].value
+            if rAttr[j].type != sAttr[j].type or rAttr[j].value != sAttr[j].value:
               match = False
               break
           if match:
@@ -353,7 +353,7 @@ class PKCS7(object):
           if recipient.encContent.algorithm == pki.oids.rsaEncryption:
             key = privKey.decrypt(recipient.encContent.content)
             self.encContent.key = util.createBuffer(key)
-          else
+          else:
             raise Exception("Unsupported asymmetric cipher, OID {0}".format(recipient.encContent.algorithm))
         self.p7._decryptContent(self)
 
@@ -402,7 +402,7 @@ class PKCS7(object):
             keyLen = 24
             ivLen = 16
             ciphFn = aes.createEncryptionCipher
-          elif cipher == pki.oids["aes256-CBC"]
+          elif cipher == pki.oids["aes256-CBC"]:
             keyLen = 32
             ivLen = 16
             ciphFn = aes.createEncryptionCipher
@@ -410,7 +410,7 @@ class PKCS7(object):
             keyLen = 24
             ivLen = 8
             ciphFn = des.createEncryptionCipher
-          else
+          else:
             raise Exception("Unsupported symmetric cipher, OID {0}".format(cipher))
           if key is None:
             key = util.createBuffer(random.getBytes(keyLen))
@@ -439,7 +439,7 @@ class PKCS7(object):
             continue
           if recipient.encContent.algorithm == pki.oids.rsaEncryption:
             recipient.encContent.content = recipient.encContent.key.encrypt(self.encContent.key.data)
-          else
+          else:
             raise Exception("Unsupported asymmetric cipher, OID {0}".format(recipient.encContent.algorithm))
 
     return msg(self)
