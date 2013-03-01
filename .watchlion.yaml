@@ -1,0 +1,2 @@
+build:
+  py: PYTHONPATH=lib python setup.py test

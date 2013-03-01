@@ -1,0 +1,4 @@
+#minimock
+pytest-cache
+pytest-cov
+watchlion
